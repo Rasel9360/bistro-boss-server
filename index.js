@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const app = express();
 require('dotenv').config()
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
 const port = process.env.PORT || 5000;
 
 
@@ -36,6 +37,7 @@ async function run() {
         const usersCollection = client.db('bistroDB').collection('users');
         const reviewsCollection = client.db('bistroDB').collection('reviews');
         const cartsCollection = client.db('bistroDB').collection('carts');
+        const paymentsCollection = client.db('bistroDB').collection('payments');
 
 
         // jwt related api
@@ -196,6 +198,50 @@ async function run() {
             const query = { _id: new ObjectId(id) };
             const result = await cartsCollection.deleteOne(query);
             res.send(result)
+        });
+
+        // Payment intent related api
+        app.post('/create-payment-intent', async (req, res) => {
+            const { price } = req.body;
+            const totalPrice = parseInt(price * 100);
+            // console.log(totalPrice);
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: totalPrice,
+                currency: "usd",
+                "payment_method_types": [
+                    "card"
+                ],
+            });
+
+            res.send({
+                clientSecret: paymentIntent.client_secret,
+            });
+        })
+
+        app.get('/payments/:email', verifyToken, async (req, res) => {
+            const email = req.params.email;
+            const query = { email: email };
+            if (req.params.email !== req.decoded.email) {
+                return res.status(403).send({ message: "forbidden access" })
+            }
+            const result = await paymentsCollection.find(query).sort({ '_id': -1 }).toArray();
+            res.send(result)
+        })
+
+        app.post('/payments', async (req, res) => {
+            const payment = req.body;
+            console.log(payment);
+            const query = {
+                _id: {
+                    $in: payment.cartIds.map(id => new ObjectId(id))
+                }
+            }
+
+            const deleteResult = await cartsCollection.deleteMany(query);
+
+            const paymentResult = await paymentsCollection.insertOne(payment)
+            res.send({ paymentResult, deleteResult })
+
         })
 
         console.log("Pinged your deployment. You successfully connected to MongoDB!");
