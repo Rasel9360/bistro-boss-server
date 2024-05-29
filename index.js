@@ -10,7 +10,17 @@ const port = process.env.PORT || 5000;
 
 // middleware
 
-app.use(cors())
+app.use(cors(
+    {
+        origin: [
+            'http://localhost:5173',
+            'http://localhost:5174',
+            'https://bistro-boss-22ae2.web.app',
+            'https://bistro-boss-22ae2.firebaseapp.com'
+        ],
+        credentials: true,
+    }
+));
 app.use(express.json())
 
 
@@ -242,6 +252,75 @@ async function run() {
             const paymentResult = await paymentsCollection.insertOne(payment)
             res.send({ paymentResult, deleteResult })
 
+        })
+
+        // payments stats 
+        app.get('/payment-stats', async (req, res) => {
+            const customers = await usersCollection.estimatedDocumentCount();
+            const menuItems = await menuCollection.estimatedDocumentCount();
+            const orders = await paymentsCollection.estimatedDocumentCount();
+
+            const result = await paymentsCollection.aggregate([
+                {
+                    $group: {
+                        _id: null,
+                        totalRevenue: { $sum: '$price' }
+                    }
+                }
+            ]).toArray()
+            const totalRevenue = result.length > 0 ? result[0].totalRevenue : 0;
+            res.send({
+                customers,
+                menuItems,
+                orders,
+                totalRevenue
+            })
+        })
+
+        // using aggregate pipeline
+        app.get('/order-stats', async (req, res) => {
+            const result = await paymentsCollection.aggregate([
+
+                {
+                    $addFields: {
+                        menuItemsObjectIds: {
+                            $map: {
+                                input: '$menuIds',
+                                as: 'itemId',
+                                in: { $toObjectId: '$$itemId' }
+                            }
+                        }
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'menu',
+                        localField: 'menuItemsObjectIds',
+                        foreignField: '_id',
+                        as: 'menuItemsData'
+                    }
+                },
+                {
+                    $unwind: '$menuItemsData'
+                },
+                {
+                    $group: {
+                        _id: '$menuItemsData.category',
+                        quantity: { $sum: 1 },
+                        revenue: { $sum: '$menuItemsData.price' }
+                    }
+                },
+                {
+                    $project: {
+                        _id: 0,
+                        category: '$_id',
+                        quantity: '$quantity',
+                        revenue: '$revenue'
+                    }
+                }
+
+            ]).toArray();
+            res.send(result)
         })
 
         console.log("Pinged your deployment. You successfully connected to MongoDB!");
